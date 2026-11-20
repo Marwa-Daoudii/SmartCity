@@ -1,257 +1,549 @@
 import React, { useEffect, useState } from "react";
+import ImportIssues from "./ImportIssues";
+import Municipality from "./Municipality";
 import { createRoot } from "react-dom/client";
-import { BrowserProvider, JsonRpcProvider, Contract, isAddress, ZeroAddress } from "ethers";
-import * as XLSX from "xlsx";
+import {
+  BrowserProvider,
+  JsonRpcProvider,
+  Contract
+} from "ethers";
+
 import abi from "./generated/abi.json";
 import configuration from "./generated/address.json";
 import "./style.css";
 
 const rpc = new JsonRpcProvider("http://127.0.0.1:8545");
 const registry = new Contract(configuration.address, abi, rpc);
-const fields = [
-  ["studentName", "Nom complet"], ["studentId", "Identifiant étudiant"],
-  ["diplomaTitle", "Diplôme"], ["issueDate", "Date d’émission"],
-  ["recipientAddress", "Adresse wallet du destinataire"], ["grade", "Mention"]
+
+const statuses = [
+  "Reported",
+  "Assigned",
+  "InProgress",
+  "Resolved",
+  "Closed"
 ];
-const empty = Object.fromEntries(fields.map(([key]) => [key, ""]));
 
-function check(record) {
-  for (const key of ["studentName", "studentId", "diplomaTitle", "issueDate"]) {
-    if (!record[key]?.trim()) throw new Error(`Champ obligatoire : ${key}`);
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(record.issueDate) ||
-      !Number.isFinite(Date.parse(record.issueDate)) ||
-      new Date(record.issueDate).toISOString().slice(0, 10) !== record.issueDate) {
-    throw new Error("Date attendue : AAAA-MM-JJ.");
-  }
-  if (!isAddress(record.recipientAddress) || record.recipientAddress.toLowerCase() === ZeroAddress) {
-    throw new Error("Une adresse wallet valide et non nulle est obligatoire pour recevoir un NFT.");
-  }
+function today() {
+  const date = new Date();
+
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
 }
 
-function student(record) {
-  return [record.studentName, record.studentId, record.diplomaTitle, record.issueDate, record.grade];
+function emptyForm() {
+  return {
+    issueId: "",
+    issueType: "StreetLight",
+    location: "",
+    description: "",
+    reportDate: today(),
+    priority: "High",
+    reportedBy: "Citizen01"
+  };
 }
 
-function metadata(record) {
-  const json = JSON.stringify({
-    name: `Certificat de ${record.studentName}`,
-    description: "Certificat académique ERC-721",
-    attributes: ["studentName", "studentId", "diplomaTitle", "issueDate", "grade"].map(key => ({
-      trait_type: key, value: record[key]
-    }))
-  });
-  const binary = Array.from(new TextEncoder().encode(json), byte => String.fromCharCode(byte)).join("");
-  return "data:application/json;base64," + btoa(binary);
+function shortAddress(address) {
+  return address
+    ? `${address.slice(0, 6)}…${address.slice(-4)}`
+    : "Non connecté";
 }
 
-// Lire les composantes Excel sans conversion UTC, pour eviter le decalage d'un jour.
-function excelDate(value) {
-  if (typeof value === "number") {
-    const d = XLSX.SSF.parse_date_code(value);
-    if (!d) return "";
-    return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
-  }
-  return String(value ?? "").trim();
-}
-
-function detail(error) {
-  return error?.info?.error?.message || error?.error?.message || error?.reason ||
-    error?.shortMessage || error?.message || String(error);
+function errorMessage(error) {
+  return (
+    error?.reason ||
+    error?.info?.error?.message ||
+    error?.error?.message ||
+    error?.shortMessage ||
+    error?.message ||
+    "Une erreur est survenue."
+  );
 }
 
 function App() {
   const [account, setAccount] = useState("");
-  const [form, setForm] = useState({ ...empty });
-  const [rows, setRows] = useState([]);
-  const [message, setMessage] = useState("");
+  const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
   const [transactions, setTransactions] = useState([]);
-  const [lookupId, setLookupId] = useState("");
-  const [certificate, setCertificate] = useState(null);
-  const [lookupMessage, setLookupMessage] = useState("");
-  const [revokeId, setRevokeId] = useState("");
+
+  const [searchId, setSearchId] = useState("");
+  const [issue, setIssue] = useState(null);
+  const [foundId, setFoundId] = useState("");
+  const [searchError, setSearchError] = useState("");
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
-    const changed = accounts => setAccount(accounts[0] || "");
-    window.ethereum?.on("accountsChanged", changed);
-    return () => window.ethereum?.removeListener("accountsChanged", changed);
+    function accountChanged(accounts) {
+      setAccount(accounts[0] || "");
+    }
+
+    function networkChanged() {
+      setAccount("");
+      setMessage("Réseau changé. Reconnecte MetaMask.");
+    }
+
+    window.ethereum?.on("accountsChanged", accountChanged);
+    window.ethereum?.on("chainChanged", networkChanged);
+
+    return () => {
+      window.ethereum?.removeListener(
+        "accountsChanged",
+        accountChanged
+      );
+
+      window.ethereum?.removeListener(
+        "chainChanged",
+        networkChanged
+      );
+    };
   }, []);
 
-  async function action(task) {
-    setBusy(true); setMessage("");
-    try { await task(); } catch (error) { setMessage(detail(error)); }
-    finally { setBusy(false); }
+  async function correctNetwork() {
+    if (!window.ethereum) {
+      throw new Error("MetaMask introuvable.");
+    }
+
+    const chainId = await window.ethereum.request({
+      method: "eth_chainId"
+    });
+
+    if (BigInt(chainId) !== 31337n) {
+      throw new Error(
+        "Sélectionne Hardhat Local dans MetaMask."
+      );
+    }
   }
 
   async function connect() {
-    if (!window.ethereum) throw new Error("MetaMask introuvable.");
-    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-    setAccount(accounts[0] || "");
-  }
+    setMessage("");
 
-  async function writable(admin = false) {
-    if (!window.ethereum) throw new Error("MetaMask introuvable.");
-    const chainId = await window.ethereum.request({ method: "eth_chainId" });
-    if (BigInt(chainId) !== 31337n) throw new Error("Sélectionne Hardhat Local dans MetaMask.");
-    const provider = new BrowserProvider(window.ethereum);
-    if (await provider.getCode(configuration.address) === "0x") {
-      throw new Error("Contrat absent. Exécute node scripts/deploy.mjs puis recharge la page.");
-    }
-    const signer = await provider.getSigner();
-    const address = await signer.getAddress(); setAccount(address);
-    const contract = new Contract(configuration.address, abi, signer);
-    const role = admin ? await contract.DEFAULT_ADMIN_ROLE() : await contract.MINTER_ROLE();
-    if (!await contract.hasRole(role, address)) {
-      throw new Error(admin ? "Compte sans rôle administrateur." : "Compte sans MINTER_ROLE. Utilise le compte Hardhat #0.");
-    }
-    return contract;
-  }
-
-  async function confirm(tx) {
-    setTransactions(old => [...old, { hash: tx.hash, status: "En attente" }]);
     try {
-      const receipt = await tx.wait();
-      if (receipt.status !== 1) throw new Error("Transaction échouée.");
-      setTransactions(old => old.map(t => t.hash === tx.hash ? { ...t, status: "Confirmée" } : t));
-      return receipt;
+      await correctNetwork();
+
+      const accounts = await window.ethereum.request({
+        method: "eth_requestAccounts"
+      });
+
+      setAccount(accounts[0] || "");
     } catch (error) {
-      setTransactions(old => old.map(t => t.hash === tx.hash ? { ...t, status: "À vérifier" } : t));
-      throw error;
+      setMessage(errorMessage(error));
     }
   }
 
-  async function issueOne() {
-    const record = Object.fromEntries(fields.map(([key]) => [key, form[key].trim()]));
-    check(record);
-    const contract = await writable();
-    const tx = await contract.mintCertificate(record.recipientAddress, student(record), metadata(record));
-    const receipt = await confirm(tx);
-    const event = receipt.logs.map(log => { try { return contract.interface.parseLog(log); } catch { return null; } })
-      .find(log => log?.name === "CertificateMinted");
-    setMessage(`Certificat émis. tokenId : ${event.args.tokenId}`);
-    setForm({ ...empty });
+  function updateField(event) {
+    const { name, value } = event.target;
+
+    setForm(previous => ({
+      ...previous,
+      [name]: value
+    }));
   }
 
-  async function loadFile(event) {
-    const file = event.target.files[0]; if (!file) return;
-const workbook = XLSX.read(await file.arrayBuffer(), {
-  cellDates: false,
-  raw: true
-});
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
-    if (!data.length) throw new Error("Fichier vide.");
-    for (const [key] of fields) {
-      if (!(key in data[0])) throw new Error(`Colonne manquante : ${key}`);
-    }
-    const seen = new Set();
-    const imported = data.map((entry, index) => {
-      const record = Object.fromEntries(fields.map(([key]) => [key,
-        key === "issueDate" ? excelDate(entry[key]) : String(entry[key] ?? "").trim()
-      ]));
-      let error = "";
-      try {
-        check(record);
-        if (seen.has(record.studentId)) throw new Error("Identifiant en double dans le fichier.");
-        seen.add(record.studentId);
-      } catch (e) { error = detail(e); }
-      return { index, record, error, selected: !error, issued: false };
-    });
-    setRows(imported); setMessage(`${imported.length} lignes importées. Vérifie les dates et les adresses.`);
-  }
+  async function createIssue(event) {
+    event.preventDefault();
+    setMessage("");
+    setBusy(true);
 
-  async function issueBatch() {
-    const selected = rows.filter(row => row.selected && !row.issued && !row.error);
-    if (!selected.length || selected.length > 20) throw new Error("Sélectionne entre 1 et 20 lignes valides.");
-    selected.forEach(row => check(row.record));
-    const contract = await writable();
-    const tx = await contract.batchMintCertificates(
-      selected.map(row => row.record.recipientAddress),
-      selected.map(row => metadata(row.record)),
-      selected.map(row => student(row.record))
-    );
-    await confirm(tx);
-    const indexes = new Set(selected.map(row => row.index));
-    setRows(old => old.map(row => indexes.has(row.index) ? { ...row, issued: true, selected: false } : row));
-    setMessage(`${selected.length} certificats émis dans une seule transaction.`);
-  }
+    let transactionHash = "";
 
-  async function search() {
-    setCertificate(null); setLookupMessage("");
     try {
-      if (!/^[1-9]\d*$/.test(lookupId.trim())) throw new Error("Saisis un tokenId entier positif.");
-      const id = BigInt(lookupId.trim());
-      const result = await registry.getCertificate(id);
-      const uri = await registry.tokenURI(id);
-      const owner = await registry.ownerOf(id);
-      setCertificate({ result, uri, owner, id: id.toString() });
-    } catch (error) { setLookupMessage(detail(error)); }
+      await correctNetwork();
+
+      const record = Object.fromEntries(
+        Object.entries(form).map(([key, value]) => [
+          key,
+          value.trim()
+        ])
+      );
+
+      for (const value of Object.values(record)) {
+        if (!value) {
+          throw new Error("Remplis tous les champs.");
+        }
+      }
+
+      const parsedDate = new Date(record.reportDate);
+
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(record.reportDate) ||
+        !Number.isFinite(parsedDate.getTime()) ||
+        parsedDate.toISOString().slice(0, 10) !== record.reportDate
+      ) {
+        throw new Error("La date saisie est invalide.");
+      }
+
+      const provider = new BrowserProvider(window.ethereum);
+
+      const code = await provider.getCode(
+        configuration.address
+      );
+
+      if (code === "0x") {
+        throw new Error(
+          "Contrat absent. Déploie UrbanIssueRegistry puis recharge la page."
+        );
+      }
+
+      const signer = await provider.getSigner();
+      setAccount(await signer.getAddress());
+
+      const contract = new Contract(
+        configuration.address,
+        abi,
+        signer
+      );
+
+      const transaction = await contract.createIssue(
+        record.issueId,
+        record.issueType,
+        record.location,
+        record.description,
+        record.reportDate,
+        record.priority,
+        record.reportedBy
+      );
+
+      transactionHash = transaction.hash;
+
+      setTransactions(previous => [
+        {
+          hash: transaction.hash,
+          status: "En attente"
+        },
+        ...previous
+      ]);
+
+      setMessage("Transaction envoyée. Confirmation en cours…");
+
+      const receipt = await transaction.wait();
+
+      if (receipt.status !== 1) {
+        throw new Error("La transaction a échoué.");
+      }
+
+      setTransactions(previous =>
+        previous.map(item =>
+          item.hash === transaction.hash
+            ? { ...item, status: "Confirmée" }
+            : item
+        )
+      );
+
+      const createdEvent = receipt.logs
+        .map(log => {
+          try {
+            return contract.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find(log => log?.name === "IssueCreated");
+
+      if (createdEvent) {
+        const id = createdEvent.args.id.toString();
+
+        setMessage(`Signalement enregistré. Numéro : ${id}`);
+        setSearchId(id);
+      } else {
+        setMessage("Signalement enregistré. Transaction confirmée.");
+      }
+
+      setForm(emptyForm());
+    } catch (error) {
+      if (transactionHash) {
+        setTransactions(previous =>
+          previous.map(item =>
+            item.hash === transactionHash
+              ? { ...item, status: "À vérifier" }
+              : item
+          )
+        );
+      }
+
+      setMessage(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function revoke() {
-    if (!/^[1-9]\d*$/.test(revokeId.trim())) throw new Error("Saisis un tokenId entier positif.");
-    const contract = await writable(true);
-    await confirm(await contract.revokeCertificate(BigInt(revokeId.trim())));
-    setCertificate(null);
-    setMessage("Certificat révoqué. Relance la vérification publique pour voir son statut.");
+  async function searchIssue(event) {
+    event.preventDefault();
+
+    setIssue(null);
+    setSearchError("");
+    setSearching(true);
+
+    try {
+      const value = searchId.trim();
+
+      if (!/^[1-9]\d*$/.test(value)) {
+        throw new Error(
+          "Saisis un numéro positif, par exemple 1."
+        );
+      }
+
+      const result = await registry.getIssue(BigInt(value));
+
+      setIssue(result);
+      setFoundId(value);
+    } catch (error) {
+      setSearchError(errorMessage(error));
+    } finally {
+      setSearching(false);
+    }
   }
 
-  return <main>
-    <h1>Certification académique ERC-721</h1>
-    <p>Réseau Hardhat Local · Chain ID 31337</p>
-    <section>
-      <h2>Administration</h2>
-      <button disabled={busy} onClick={() => action(connect)}>Connecter MetaMask</button>
-      <p>Compte : {account || "Non connecté"}</p>
-      <h3>Émettre un certificat NFT</h3>
-      <p>L’adresse du destinataire est maintenant obligatoire.</p>
-      <form onSubmit={event => { event.preventDefault(); action(issueOne); }}>
-        {fields.map(([key, label]) => <label key={key}>{label}
-          <input type={key === "issueDate" ? "date" : "text"} value={form[key]}
-            required={key !== "grade"} disabled={busy}
-            onChange={event => setForm({ ...form, [key]: event.target.value })} />
-        </label>)}
-        <button disabled={busy}>Émettre</button>
-      </form>
-      <h3>Importer Excel ou CSV</h3>
-      <input type="file" accept=".xlsx,.csv" disabled={busy}
-        onChange={event => action(() => loadFile(event))} />
-      {rows.length > 0 && <>
-        <div className="table-wrap"><table><thead><tr>
-          <th>Choix</th>{fields.map(([key, label]) => <th key={key}>{label}</th>)}<th>État</th>
-        </tr></thead><tbody>{rows.map(row => <tr key={row.index}>
-          <td><input type="checkbox" checked={row.selected} disabled={busy || !!row.error || row.issued}
-            onChange={() => setRows(old => old.map(r => r.index === row.index ? { ...r, selected: !r.selected } : r))} /></td>
-          {fields.map(([key]) => <td key={key}>{row.record[key]}</td>)}
-          <td>{row.error || (row.issued ? "Émis" : "Prêt")}</td>
-        </tr>)}</tbody></table></div>
-        <button disabled={busy} onClick={() => action(issueBatch)}>Émettre les lignes sélectionnées</button>
-      </>}
-      <h3>Révoquer un certificat</h3>
-      <input placeholder="tokenId" value={revokeId} disabled={busy} onChange={e => setRevokeId(e.target.value)} />
-      <button disabled={busy} onClick={() => action(revoke)}>Révoquer</button>
-      <p role="status">{busy ? "Opération en cours, vérifie MetaMask…" : message}</p>
-      <h3>Transactions</h3>
-      {transactions.map(tx => <p className="hash" key={tx.hash}>{tx.status} : {tx.hash}</p>)}
-    </section>
-    <section>
-      <h2>Vérification publique</h2>
-      <label>tokenId<input value={lookupId} onChange={e => setLookupId(e.target.value)} /></label>
-      <button onClick={search}>Vérifier</button>
-      <p>{lookupMessage}</p>
-      {certificate && <>
-        <p>tokenId : {certificate.id}</p>
-        {["studentName", "studentId", "diplomaTitle", "issueDate", "grade"].map(key =>
-          <p key={key}>{fields.find(([k]) => k === key)[1]} : {certificate.result.student[key]}</p>)}
-        <p className="hash">Destinataire initial : {certificate.result.recipient}</p>
-        <p className="hash">Propriétaire actuel du NFT : {certificate.owner}</p>
-        <p><strong>Statut : {certificate.result.revoked ? "Révoqué" : "Valide"}</strong></p>
-        <label>tokenURI<textarea readOnly value={certificate.uri} rows={5} /></label>
-      </>}
-    </section>
-    <p className="hash">Contrat : {configuration.address}</p>
-  </main>;
+  return (
+    <main className="app">
+      <header className="header">
+        <div>
+          <span className="eyebrow">SERVICES URBAINS</span>
+          <h1>SmartCity</h1>
+          <p>Déclarer un problème et consulter son suivi.</p>
+        </div>
+
+        <div className="wallet">
+          <span className="network">Hardhat Local</span>
+
+          <button
+            type="button"
+            onClick={connect}
+            disabled={busy}
+          >
+            {account
+              ? shortAddress(account)
+              : "Connecter MetaMask"}
+          </button>
+        </div>
+      </header>
+
+      {message && (
+        <div className="notice" role="status">
+          {message}
+        </div>
+      )}
+
+      <div className="layout">
+        <section className="card">
+          <div className="section-heading">
+            <span className="step">01</span>
+            <div>
+              <h2>Nouveau signalement</h2>
+              <p>Renseigne les informations du problème.</p>
+            </div>
+          </div>
+
+          <form onSubmit={createIssue}>
+            <div className="form-grid">
+              <label>
+                Identifiant du signalement
+                <input
+                  name="issueId"
+                  placeholder="CITY-2026-001"
+                  value={form.issueId}
+                  onChange={updateField}
+                  required
+                  disabled={busy}
+                />
+              </label>
+
+              <label>
+                Type de problème
+                <select
+                  name="issueType"
+                  value={form.issueType}
+                  onChange={updateField}
+                  disabled={busy}
+                >
+                  <option value="StreetLight">Éclairage public</option>
+                  <option value="Road">Voirie</option>
+                  <option value="Waste">Déchets</option>
+                  <option value="Water">Eau</option>
+                  <option value="Other">Autre</option>
+                </select>
+              </label>
+            </div>
+
+            <label>
+              Localisation
+              <input
+                name="location"
+                placeholder="Avenue Mohammed V"
+                value={form.location}
+                onChange={updateField}
+                required
+                disabled={busy}
+              />
+            </label>
+
+            <label>
+              Description
+              <textarea
+                name="description"
+                placeholder="Décris le problème constaté…"
+                value={form.description}
+                onChange={updateField}
+                rows={4}
+                required
+                disabled={busy}
+              />
+            </label>
+
+            <div className="form-grid">
+              <label>
+                Date du signalement
+                <input
+                  type="date"
+                  name="reportDate"
+                  value={form.reportDate}
+                  onChange={updateField}
+                  required
+                  disabled={busy}
+                />
+              </label>
+
+              <label>
+                Priorité
+                <select
+                  name="priority"
+                  value={form.priority}
+                  onChange={updateField}
+                  disabled={busy}
+                >
+                  <option value="Low">Faible</option>
+                  <option value="Medium">Moyenne</option>
+                  <option value="High">Élevée</option>
+                </select>
+              </label>
+            </div>
+
+            <label>
+              Pseudo fictif du déclarant
+              <input
+                name="reportedBy"
+                placeholder="Citizen01"
+                value={form.reportedBy}
+                onChange={updateField}
+                required
+                disabled={busy}
+              />
+            </label>
+
+            <button
+              className="primary full-width"
+              disabled={busy}
+            >
+              {busy ? "Enregistrement…" : "Enregistrer le signalement"}
+            </button>
+          </form>
+        </section>
+
+        <section className="card">
+          <div className="section-heading">
+            <span className="step">02</span>
+            <div>
+              <h2>Consulter un signalement</h2>
+              <p>Recherche par numéro numérique.</p>
+            </div>
+          </div>
+
+          <form onSubmit={searchIssue} className="search-form">
+            <label>
+              Numéro du signalement
+              <input
+                placeholder="Exemple : 1"
+                value={searchId}
+                onChange={event => setSearchId(event.target.value)}
+                required
+              />
+            </label>
+
+            <button disabled={searching}>
+              {searching ? "Recherche…" : "Rechercher"}
+            </button>
+          </form>
+
+          {searchError && (
+            <p className="error" role="alert">
+              {searchError}
+            </p>
+          )}
+
+          {!issue && !searchError && (
+            <div className="empty-state">
+              Les informations du signalement apparaîtront ici.
+            </div>
+          )}
+
+          {issue && (
+            <article className="issue-details">
+              <div className="issue-title">
+                <h3>{issue.issueId}</h3>
+                <span className="badge">
+                  {statuses[Number(issue.status)]}
+                </span>
+              </div>
+
+              <dl>
+                <dt>Numéro</dt>
+                <dd>{foundId}</dd>
+
+                <dt>Type</dt>
+                <dd>{issue.issueType}</dd>
+
+                <dt>Localisation</dt>
+                <dd>{issue.location}</dd>
+
+                <dt>Description</dt>
+                <dd>{issue.description}</dd>
+
+                <dt>Date</dt>
+                <dd>{issue.reportDate}</dd>
+
+                <dt>Priorité</dt>
+                <dd>{issue.priority}</dd>
+
+                <dt>Déclarant</dt>
+                <dd>{issue.reportedBy}</dd>
+
+                <dt>Équipe affectée</dt>
+                <dd>{issue.assignedTo || "Non affectée"}</dd>
+
+                <dt>Adresse du déclarant</dt>
+                <dd className="hash">{issue.reporter}</dd>
+              </dl>
+            </article>
+          )}
+        </section>
+      </div>
+
+      <section className="card transactions">
+        <h2>Transactions de cette session</h2>
+
+        {transactions.length === 0 ? (
+          <p className="muted">Aucune transaction envoyée.</p>
+        ) : (
+          transactions.map(transaction => (
+            <div className="transaction" key={transaction.hash}>
+              <span>{transaction.status}</span>
+              <code className="hash">{transaction.hash}</code>
+            </div>
+          ))
+        )}
+      </section>
+
+      <ImportIssues />
+      <Municipality />
+
+      <footer>
+        <span>UrbanIssueRegistry</span>
+        <span className="hash">{configuration.address}</span>
+      </footer>
+    </main>
+  );
 }
 
 createRoot(document.getElementById("root")).render(<App />);

@@ -1,144 +1,173 @@
-# Devoir 2 Certification académique ERC-721
+# SmartCity — Gestion des signalements urbains
 
-Ce projet fait évoluer le devoir 1 vers des certificats NFT ERC-721.
-Il utilise Solidity 0.8.26, OpenZeppelin Contracts 5.4.0, Hardhat,
-React, Vite, Ethers.js et SheetJS. Le fonctionnement décrit ici est local.
+Application décentralisée permettant de déclarer un problème urbain,
+de consulter son suivi et de conserver l’historique des interventions.
 
-## Fonctions
+## Technologies
 
-- Un certificat correspond à un NFT unique.
-- MINTER_ROLE autorise l'émission individuelle ou par lot.
-- DEFAULT_ADMIN_ROLE autorise la révocation et la gestion des rôles.
-- Le déployeur reçoit les deux rôles.
-- Les identifiants étudiants ne sont pas réutilisables, même après révocation.
-- Les métadonnées sont accessibles par tokenURI au format data URI JSON base64.
-- Le frontend propose la saisie, l'import CSV/Excel, la révocation et la vérification publique.
+- Solidity 0.8.26
+- Hardhat Local
+- React et Vite
+- ethers.js
+- MetaMask
+- SheetJS pour les fichiers Excel et CSV
 
-## Installation dans la copie du devoir 1
+## Fonctionnalités
 
-Ces fichiers sont destinés au dossier chain-devoir2, copie du projet existant.
-Les dépendances du devoir 1 doivent être présentes. Depuis sa racine :
+- Créer et consulter un signalement.
+- Empêcher la réutilisation d’un identifiant.
+- Affecter une équipe avec le compte municipal.
+- Modifier le statut dans l’ordre :
+  Reported → Assigned → InProgress → Resolved → Closed.
+- Consulter l’historique : dates, acteurs, équipes et commentaires.
+- Lire un fichier Excel ou CSV, valider les lignes et les sélectionner.
+- Enregistrer les lignes sélectionnées, une transaction par ligne.
+
+Seul le compte municipal peut affecter une équipe et modifier le statut.
+La création et la consultation sont accessibles aux autres comptes.
+
+## Installation
+
+Prérequis : Node.js, npm et l’extension MetaMask.
+
+Depuis le dossier du projet :
 
 ```powershell
-npm.cmd install --save-exact @openzeppelin/contracts@5.4.0
+npm.cmd ci
 ```
 
-Cette commande nécessite Internet. Elle met à jour package.json et package-lock.json.
-Conserver node_modules pour le fonctionnement hors connexion.
+L’installation initiale nécessite une connexion Internet.
+Une fois les dépendances installées, la démonstration utilise le réseau local.
 
-## Démarrage
+## Lancement
 
-Terminal 1, si aucun nœud n'utilise déjà le port 8545 :
+### 1. Démarrer la blockchain locale
+
+Dans un premier terminal :
 
 ```powershell
-yarn.cmd hardhat node
+npx.cmd hardhat node
 ```
 
-Terminal 2 :
+Garder ce terminal ouvert. Si le port 8545 est déjà utilisé,
+vérifier si un nœud Hardhat est déjà en cours d’exécution.
+
+### 2. Déployer le contrat
+
+Dans un deuxième terminal, depuis le dossier du projet :
 
 ```powershell
 node scripts/deploy.mjs
-.\node_modules\.bin\vite.cmd frontend --host 127.0.0.1
 ```
 
-Ouvrir http://127.0.0.1:5173. Le déploiement génère automatiquement
-frontend/src/generated/abi.json et address.json.
-Conserver les deux terminaux ouverts.
+Le script compile UrbanIssueRegistry, déploie le contrat et met à jour :
 
-## MetaMask
+- frontend/src/generated/abi.json
+- frontend/src/generated/address.json
 
-- RPC : http://127.0.0.1:8545
+L’adresse du contrat et celle du compte municipal sont affichées
+dans le terminal.
+
+### 3. Démarrer l’interface
+
+Dans ce même deuxième terminal :
+
+```powershell
+npx.cmd vite frontend --host 127.0.0.1 --port 5174
+```
+
+Ouvrir l’adresse affichée après « Local: ».
+Si le port est occupé, Vite choisit un autre port.
+
+### 4. Configurer MetaMask
+
+- Nom du réseau : Hardhat Local
+- URL RPC : http://127.0.0.1:8545
 - Chain ID : 31337
 - Symbole : ETH
-- Administration : compte Hardhat numéro 0
-- Adresse : 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 
-L'adresse du destinataire est obligatoire et ne peut pas être nulle.
-Les comptes fournis par Hardhat servent uniquement aux tests locaux.
+Pour la gestion municipale, utiliser le compte Hardhat numéro 0,
+qui déploie le contrat.
 
-## Essai individuel
-
-- Nom : Amina Benali
-- Identifiant étudiant : 2023-INF-042
-- Diplôme : Licence Informatique
-- Date : 2026-06-15
-- Destinataire : 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
-- Mention : Mention Bien
-
-Cliquer sur Émettre et confirmer dans MetaMask. Le tokenId est affiché après confirmation.
-La vérification publique affiche les informations, le propriétaire actuel, le tokenURI et le statut.
-
-## Import
-
-Utiliser etudiants_devoir2.csv ou un fichier Excel avec les mêmes colonnes :
-studentName, studentId, diplomaTitle, issueDate, recipientAddress, grade.
-Les dates doivent être au format AAAA-MM-JJ. Pour Excel, les composantes de date
-sont lues sans passer par une conversion UTC.
-
-Sélectionner entre 1 et 20 lignes. Une seule confirmation MetaMask suffit pour le lot.
-Si une ligne est rejetée par le contrat, tout le lot est annulé.
-
-La fonction batchMintCertificates possède trois tableaux : to, uris et students.
-Le troisième tableau est une adaptation de la signature indicative du sujet :
-il fournit au contrat les identifiants et données étudiants à contrôler,
-car un URI est une chaîne opaque que le contrat ne décode pas en JSON.
-
-## Révocation
-
-Saisir le tokenId, cliquer sur Révoquer et confirmer avec un compte administrateur.
-Relancer la vérification publique. Le NFT existe toujours, avec le statut Révoqué.
-La révocation ne brûle pas le NFT et n'autorise pas de remint du même studentId.
+Les comptes fournis par Hardhat sont publics et réservés aux tests.
+Ne jamais les utiliser avec de vrais fonds.
 
 ## Tests
 
-Terminal 3 :
+Pendant que Hardhat fonctionne, ouvrir un troisième terminal :
 
 ```powershell
-node test/certificates.mjs
+node test/urban-issues.mjs
 ```
 
-Le script réalise 20 scénarios. Il utilise une instance séparée et les comptes
-Hardhat 2, 3 et 4 pour ne pas modifier le compteur de transactions du compte MetaMask 0.
-ReentrantReceiver.sol est uniquement un contrat de test ; le script de déploiement
-de l'application déploie seulement CertificateNFT.
+Les neuf tests vérifient :
 
-La compilation et les 20 scénarios ont été exécutés avec succès dans l'environnement
-de préparation sur Hardhat 3.21.2. Le build Vite a aussi été vérifié.
-Relancer les tests sur le PC pour obtenir sa propre sortie et ses captures.
+1. La création et la lecture d’un signalement.
+2. Le refus d’un identifiant déjà utilisé.
+3. Le refus d’une affectation sans autorisation.
+4. L’affectation par la municipalité.
+5. Le refus d’un saut de statut.
+6. Le refus d’une modification sans autorisation.
+7. Le passage successif à En cours, Résolu puis Fermé.
+8. La conservation des cinq étapes dans l’historique.
+9. Le refus d’un numéro inexistant.
 
-## Choix et limites
+Résultat obtenu : 9 tests réussis sur 9.
 
-Les NFT restent transférables selon ERC-721. Le destinataire initial est conservé
-séparément du propriétaire actuel. Un transfert ne change pas le statut de révocation.
-Le statut doit être lu sur le contrat ; le JSON du tokenURI ne contient pas de statut.
-Les métadonnées sont immuables après mint dans cette version.
+Les tests déploient un contrat indépendant de celui de l’interface.
 
-Le contrat contrôle les champs non vides et l'unicité exacte de studentId,
-mais pas l'authenticité du diplôme, le format sémantique de la date, ni la cohérence
-du JSON fourni avec les champs stockés. Voir AUDIT.md.
+## Import Excel et CSV
 
-Après un redémarrage du nœud Hardhat, ses données sont réinitialisées.
-Redéployer le contrat et recharger l'interface. En cas de Nonce too high,
-effacer l'activité et les données de nonce MetaMask sur le réseau local.
+Fichiers d’exemple :
 
-Le livrable local n'inclut pas de déploiement Sepolia. L'adresse et la transaction
-Sepolia demandées dans la liste finale du sujet restent à produire si l'enseignante
-les exige en plus de la démonstration locale.
+- urban_issues.csv
+- urban_issues.xlsx
 
-## Références
+Colonnes attendues :
 
-- https://docs.openzeppelin.com/contracts/5.x/access-control
-- https://docs.openzeppelin.com/contracts/5.x/erc721
-- https://eips.ethereum.org/EIPS/eip-721
+issueId, issueType, location, description, reportDate,
+priority, reportedBy, assignedTo, status
 
-## Comprendre les fichiers
+Règles d’import :
 
-| Fichier | Rôle |
-| --- | --- |
-| contracts/CertificateNFT.sol | NFT, certificats, rôles et révocation |
-| contracts/ReentrantReceiver.sol | Simulation de reentrancy pour les tests |
-| scripts/compile.mjs | Compilation locale de Solidity et des imports OpenZeppelin |
-| scripts/deploy.mjs | Déploiement et génération de l'adresse du frontend |
-| frontend/src/main.jsx | Formulaires, import et appels au contrat |
-| test/certificates.mjs | 20 scénarios de vérification |
-| AUDIT.md | Périmètre, résultats et limites de l'audit simplifié |
+- Date au format AAAA-MM-JJ.
+- Priorité : Low, Medium ou High.
+- Pour l’enregistrement, status doit être Reported et assignedTo vide.
+- Les équipes sont affectées ensuite dans la gestion municipale.
+- Les champs obligatoires et doublons du fichier sont vérifiés.
+- Les identifiants déjà enregistrés sont contrôlés avant l’envoi.
+- Chaque ligne sélectionnée nécessite une confirmation MetaMask.
+
+L’import utilise plusieurs transactions : si une transaction échoue,
+les lignes déjà confirmées restent enregistrées.
+Vérifier toute transaction envoyée avant de la relancer.
+
+## Exemple de démonstration
+
+1. Connecter MetaMask sur Hardhat Local.
+2. Créer un signalement avec un identifiant unique.
+3. Le rechercher avec son numéro numérique.
+4. Affecter UrbanTeam01 avec un commentaire.
+5. Passer successivement à En cours, Résolu puis Fermé.
+6. Consulter l’historique.
+7. Importer un fichier, sélectionner les lignes et confirmer les transactions.
+8. Rechercher les signalements importés.
+
+Après une modification municipale, cliquer à nouveau sur
+« Rechercher » pour actualiser le résultat de consultation.
+
+## Redémarrage du réseau local
+
+Avec la configuration utilisée, arrêter puis relancer le nœud Hardhat
+réinitialise la blockchain locale.
+
+Il faut alors redéployer le contrat, actualiser l’interface
+et recréer les signalements.
+
+L’adresse utilisée par l’interface se trouve dans :
+frontend/src/generated/address.json
+
+## Données
+
+Les données utilisées sont fictives.
+Aucune clé privée ne doit être ajoutée au code frontend ni au dépôt GitHub.
